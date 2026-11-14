@@ -129,28 +129,22 @@ function normalizeRelationship(
     return prev;
   }
 
-  const rawStatus = VALID_REL_STATUSES.includes(incoming.status as RelationshipStatus)
+  const nextStatus = VALID_REL_STATUSES.includes(incoming.status as RelationshipStatus)
     ? (incoming.status as RelationshipStatus)
     : prev.status;
 
-  let nextStatus = rawStatus;
+  if (prev.status === 'Lajang' && nextStatus !== 'Lajang' && nextStatus !== 'PDKT') {
+    return prev;
+  }
+  if (
+    prev.status === 'PDKT' && nextStatus === 'Menikah' &&
+    !/\b(nikah|menikah|lamar|melamar|akad|ijab)\b/i.test(selectedAnswer)
+  ) {
+    return prev;
+  }
+
   let partnerName = stripEmDash((incoming.partnerName || '').trim()) || prev.partnerName || '';
   let partnerNote = stripEmDash((incoming.partnerNote || '').trim()) || prev.partnerNote || '';
-
-  // Guardrail: never allow skipping straight from Lajang to Menikah/Pacaran without an introduction
-  if (prev.status === 'Lajang') {
-    if (nextStatus === 'Menikah' || nextStatus === 'Pacaran') {
-      nextStatus = partnerName ? 'PDKT' : 'Lajang';
-    }
-    if (nextStatus === 'Berpisah') {
-      nextStatus = 'Lajang';
-    }
-  } else if (prev.status === 'PDKT') {
-    const explicitlyMarrying = /\b(nikah|menikah|lamar|melamar|akad|ijab)\b/i.test(selectedAnswer);
-    if (nextStatus === 'Menikah' && !explicitlyMarrying) {
-      nextStatus = 'Pacaran';
-    }
-  }
 
   // Never allow an unnamed partner for non-Lajang active relationships
   if (
@@ -223,7 +217,7 @@ const chapterSchema = {
         status: {
           type: Type.STRING,
           description:
-            'Status hubungan saat ini: Lajang, PDKT, Pacaran, Menikah, atau Berpisah. Jangan loncat status tanpa alur pengenalan.',
+            'Status hubungan sekarang: Lajang, PDKT, Pacaran, Menikah, atau Berpisah. Pertahankan status sebelumnya jika pilihan pemain dan adegan belum mendukung perubahan. Kenalan atau berteman saja belum termasuk PDKT.',
         },
         partnerName: {
           type: Type.STRING,
@@ -244,10 +238,10 @@ const chapterSchema = {
         type: Type.OBJECT,
         properties: {
           id: { type: Type.STRING, description: 'ID singkat seperti opt_1.' },
-          label: { type: Type.STRING, description: 'Teks pilihan singkat dan konkret (maks 12 kata).' },
+          label: { type: Type.STRING, description: 'Tindakan spesifik yang bisa langsung dilakukan pemain di adegan ini (maks 12 kata).' },
           hint: {
             type: Type.STRING,
-            description: 'Petunjuk singkat konsekuensi (maks 8 kata).',
+            description: 'Petunjuk singkat tentang risiko, biaya, atau peluang dari tindakan itu (maks 8 kata). Hindari angka statistik dan janji hasil pasti.',
           },
         },
         required: ['id', 'label', 'hint'],
@@ -299,17 +293,19 @@ const endingSchema = {
 const SYSTEM_INSTRUCTION = `Kamu adalah penulis skenario simulasi kehidupan nyata (Naseeb) dalam Bahasa Indonesia kasual yang santai, natural, dan membekas.
 
 Gaya penulisan WAJIB:
-1. BAHASA KASUAL SEHARI-HARI: Pakai Bahasa Indonesia santai dan akrab seperti obrolan nyata. Narasi menyapa pemain dengan "kamu". Sesuaikan pilihan kata, sapaan, dan tingkat formalitas dialog dengan lingkungan, generasi, dan kedekatan antar tokoh. Pakai slang atau campuran bahasa secukupnya kalau memang wajar untuk tokohnya.
+1. BAHASA KASUAL SEHARI-HARI: Pakai kata yang paling umum dipakai dalam obrolan sehari-hari. Campuran English boleh kalau memang lebih familiar, misalnya "subtitle", "deadline", atau "nge-chat". Hindari padanan baku yang terasa asing seperti "takarir" saat orang di adegan itu biasanya bilang "subtitle". Terapkan juga ke judul, pertanyaan, opsi, dan epilog. Narasi menyapa pemain dengan "kamu". Sesuaikan slang, sapaan, dan tingkat formalitas dengan lingkungan dan kedekatan antar tokoh.
 2. SINGKAT, PADAT, MEMBEKAS: Untuk satu bab, tulis sekitar 60–120 kata dalam paragraf pendek. Langsung masuk ke momen yang sedang terjadi dan sisakan ruang untuk tanggapan atau reaksi.
-3. PERCAKAPAN DUA ARAH: Saat tokoh berinteraksi, biarkan mereka saling menjawab, menyela, atau bereaksi sewajarnya. Karakter pemain juga boleh bicara langsung sesuai pilihan terakhir dan sifatnya. Sisipkan ucapan dalam tanda kutip biasa di tengah prosa, diselingi gerak atau reaksi yang bikin pembicaranya jelas. Contoh gaya: Kamu geser kursi. "Mau duduk dulu?" Rani naruh tasnya. "Boleh. Tapi gue belum siap cerita." Kamu angguk dan tuangin air. Hindari format skrip Nama: dialog dan blockquote Markdown.
+3. PERCAKAPAN DUA ARAH: Tulis percakapan seperti orang yang betulan lagi ngobrol. Tokoh bisa nyeletuk, bercanda, ragu, menyela, atau beda pendapat sesuai sifat dan kedekatannya. Bedakan cara bicara orang rumah, teman, dan rekan kerja. Sisipkan ucapan dalam tanda kutip di tengah prosa dan pakai tindakan atau reaksi untuk memperjelas pembicara. Karakter pemain boleh menanggapi sesuai pilihan terakhir. Hindari format skrip Nama: dialog dan blockquote Markdown.
 4. KONSEKUENSI NYATA: Sesuaikan dinamika cerita dengan nama, gender, kelas keluarga awal, fase cerita, dan statistik saat ini. JANGAN sebut atau hitung umur angka secara kaku, fokus ke alur kejadian dan momen hidupnya.
 5. ALUR TANPA BATAS BAB: Cerita terus jalan tanpa batas bab sampai kesehatan (health) menyentuh 0. Kalau health sudah tipis (< 25) atau ambil risiko ekstrem/burnout parah, kasih konsekuensi nyata yang bisa bikin health turun sampai 0.
-6. KONTINUITAS HUBUNGAN & PLOT PENGENALAN (WAJIB!): DILARANG KERAS tiba-tiba memunculkan istri, suami, atau pacar yang belum pernah ada adegan kenalannya! Kalau status masih "Lajang", karakter BELUM punya pasangan. Hubungan romantis harus mulai dari adegan kenalan dulu (sebut nama panggilan dan di mana ketemu), lanjut ke PDKT, lalu Pacaran, baru Menikah jika pemain memilih ke arah itu.
-7. SEIMBANGKAN HIDUP (BUKAN KERJA MELULU): Jangan bikin semua bab dan opsi soal kerja/bisnis/duit doang. Selipkan momen sosial, nongkrong, kenalan sama orang baru yang punya nama & karakter, romansa/PDKT, keluarga, hobi, dan kesehatan. Pastikan 4 opsi tiap bab punya variasi arah (misalnya campuran karier/uang, sosial/kenalan/romansa, dan urusan pribadi).
+6. HUBUNGAN TUMBUH ALAMI: Perkenalkan tokoh baru sesuai perannya, misalnya teman, tetangga, atau rekan kerja. Kenalan, nongkrong, atau bersikap ramah saja tidak mengubah status. Pertahankan status sebelumnya sampai pilihan pemain mengarah ke romansa dan interaksi antar tokoh mendukungnya. Ketertarikan bisa tumbuh pelan, tetap sebatas teman, atau mereda sesuai pilihan pemain. Kenalkan calon pasangan di cerita sebelum status berkembang. Untuk keputusan besar seperti jadian atau menikah, beri pemain kesempatan memilih dan tunjukkan respons tokoh lain.
+7. VARIASI ALUR: Perhatikan beberapa bab terakhir. Variasikan jenis adegan, konflik, dan dilema sesuai apa yang sedang dijalani karakter. Pakai tema seperti keluarga, teman, kerja, hobi, kesehatan, dan urusan sehari-hari. Sesekali beri plot twist yang masuk akal, misalnya konsekuensi pilihan lama muncul lagi atau tokoh punya alasan yang baru terungkap. Bangun kejutan dari petunjuk atau kejadian yang sudah ada, hormati pilihan pemain, dan biarkan momen tenang punya tempat. Buat empat opsi dengan tindakan yang benar-benar berbeda dan sesuai adegan.
 8. FORMAT ADEGAN: Pakai baris baru ganda (\\n\\n) antarparagraf. Kalau pembicara berganti, mulai paragraf baru bila perlu agar percakapan jelas. Akhiri narasi pada momen yang membuka dilema. Taruh pertanyaan di dilemmaQuestion, pilihan di options, dan perubahan angka di statDeltas. Narasi cukup menunjukkan dampaknya lewat kejadian. Jangan tempel daftar stats, quest, pencapaian, atau pilihan A–D ke dalam narasi.
 9. DILARANG PAKAI EM DASH: Jangan pernah pakai tanda pisah panjang / em dash (—) di narasi, dialog, judul, maupun opsi. Pakai koma, titik, atau kata sambung biasa.
 10. KEHIDUPAN INDONESIA MASA KINI: Pakai teknologi, kebiasaan, dan tekanan hidup yang masuk akal untuk tempat, fase hidup, kelas keluarga, dan kemampuan ekonomi karakter. Misalnya grup chat keluarga, pembayaran QR, jualan lewat marketplace, kerja hybrid, alat AI, atau kabar dari video pendek. Pilih detail yang memengaruhi adegan atau keputusan dan variasikan konteksnya. Sisakan ruang untuk interaksi tatap muka dan kebiasaan setempat.
-11. TREN DAN KONTINUITAS: Rujukan masa kini berlaku untuk latar awal dan suasana umum. Hormati periode, tempat, teknologi, dan kebiasaan yang sudah muncul di cerita. Kalau waktu berlalu, tunjukkan perubahan secara wajar seiring fase hidup karakter. Gunakan tren yang masuk akal bagi lingkungannya. Kalau ragu tentang meme, kabar, harga, atau fitur terbaru, pakai rujukan umum tanpa mengklaimnya sedang viral atau menyebut fakta yang belum pasti. Untuk epilog, ambil detail dari perjalanan yang sudah diceritakan.`;
+11. TREN DAN KONTINUITAS: Rujukan masa kini berlaku untuk latar awal dan suasana umum. Hormati periode, tempat, teknologi, dan kebiasaan yang sudah muncul di cerita. Kalau waktu berlalu, tunjukkan perubahan secara wajar seiring fase hidup karakter. Gunakan tren yang masuk akal bagi lingkungannya. Kalau ragu tentang meme, kabar, harga, atau fitur terbaru, pakai rujukan umum tanpa mengklaimnya sedang viral atau menyebut fakta yang belum pasti. Untuk epilog, ambil detail dari perjalanan yang sudah diceritakan.
+12. DILEMA LAHIR DARI ADEGAN: Perlihatkan tindakan yang dipilih pemain, lalu reaksi atau akibat konkretnya. Biarkan hal itu membuka keputusan berikutnya. Misalnya, bantu tetangga angkat galon, dia ingat kamu bisa desain, lalu malamnya dia chat minta bantuan bikin poster dadakan. Kalau waktu atau tempat berpindah, beri penanda singkat di prosa. Perubahan besar seperti menerima tawaran atau bikin janji baru tetap jadi pilihan pemain.
+13. TOKOH PUNYA URUSAN SENDIRI: Kenalkan tokoh lewat hal yang ia kerjakan, cara bicaranya, atau detail keseharian yang khas. Pakai lagi nama, kebiasaan, janji, dan urusan yang masih relevan. Tokoh lain boleh punya waktu terbatas, keberatan, atau alasan sendiri untuk membantu. Selipkan humor ringan dari situasi atau celetukan kalau suasananya pas. Saat ada dilema, beri empat tindakan yang merespons kejadian konkret tadi dan punya konsekuensi yang berbeda.`;
 
 const STORY_PERIOD_FORMAT = new Intl.DateTimeFormat('id-ID', {
   month: 'long',
@@ -389,10 +385,10 @@ function summarizeHistory(history: TimelineEntry[]): string {
       : '';
 
   const recentText = recent
-    .map(
-      (h) =>
-        `Bab ${h.turn} (${h.phase} · ${h.chapterTitle}): Ditanya "${h.question}" -> Memilih "${h.chosenAnswer}". Dampak: ${h.consequenceNote}`,
-    )
+    .map((h, index) => {
+      const summary = `Bab ${h.turn} (${h.phase} · ${h.chapterTitle}): Ditanya "${h.question}" -> Memilih "${h.chosenAnswer}". Dampak: ${h.consequenceNote}`;
+      return index >= recent.length - 3 && h.narrative ? `${summary}\nAdegan: ${h.narrative}` : summary;
+    })
     .join('\n');
 
   return olderSummary ? `${olderSummary}\n\nBab-bab terbaru:\n${recentText}` : recentText;
@@ -700,7 +696,7 @@ app.post('/api/story/next', async (req, res) => {
     const currentRelationship: RelationshipProfile = character.relationship?.status
       ? character.relationship
       : { status: 'Lajang' };
-    const historyText = summarizeHistory(history);
+    const historyText = summarizeHistory(active.timeline);
 
     const relationshipSummary =
       currentRelationship.status === 'Lajang'
@@ -730,9 +726,9 @@ Pilihan Terbaru yang Diambil:
 Instruksi Bab ${turn}:
 - Ceritain kelanjutan kejadiannya secara mengalir dan alami dari bab sebelumnya tanpa nyebut atau ngitung angka umur.
 - Tunjukkan dampak pilihan lewat tindakan, ucapan, dan respons tokoh. Kalau pilihan pemain berisi ucapan, masukkan ucapannya dalam tanda kutip dan beri tokoh lain ruang untuk bereaksi.
-- ATURAN KONTINUITAS PASANGAN: JANGAN PERNAH tiba-tiba nyebut istri/suami/pacar kalau status masih "Lajang"! Kalau ada tokoh baru yang dikenalin di adegan ini, tulis momen kenalannya secara jelas (sebut namanya + di mana ketemu) dan isi relationshipUpdate ke "PDKT". Kalau belum ada romansa, pertahankan status "${currentRelationship.status}".
+- Pertahankan status "${currentRelationship.status}" kalau pilihan dan interaksi tokoh belum mendukung perubahan. Tokoh baru boleh jadi bagian cerita tanpa jadi gebetan.
 - Tunjukin efek nyata dari pilihan "${selectedAnswer}" ke statistik (statDeltas). Kalau pilihannya nekat/merusak tubuh atau health udah tipis, health bisa turun drastis sampai 0.
-- Kasih 1 pertanyaan dilema baru dan 4 opsi yang BERVARIASI (jangan kerja/karier semua; sering kasih opsi sosial, nongkrong, kenalan sama orang baru, romansa, keluarga, atau jaga diri).`;
+- Biarkan akibat pilihan tadi memunculkan 1 dilema yang konkret. Kasih 4 tindakan berbeda yang bisa langsung dilakukan dari situasi itu. Masukkan opsi romansa hanya kalau muncul wajar dari situasi.`;
 
     const response = await callGeminiWithRetry(() =>
       ai.models.generateContent({
