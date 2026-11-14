@@ -1,0 +1,6 @@
+{
+  "name": "Naseeb — Simulasi Kehidupan Interaktif",
+  "description": "Simulasi real-life interaktif berbasis kecerdasan buatan di mana nama, gender, dan setiap keputusanmu membentuk nasib karakter serta jalan cerita yang unik.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
