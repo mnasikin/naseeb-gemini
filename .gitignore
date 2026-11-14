@@ -1,8 +1,21 @@
+# Dependencies and generated output
 node_modules/
 build/
 dist/
 coverage/
-.DS_Store
+/server.js
+*.tsbuildinfo
+
+# Logs and OS metadata
 *.log
+.DS_Store
+
+# Local credentials and configuration
 .env*
 !.env.example
+
+# SQLite data and generated encryption keys
+/.byok/
+.gemini.sqlite3*
+gemini.key
+gemini-*.key

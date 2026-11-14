@@ -1,0 +1,32 @@
+{
+  "id": "/",
+  "name": "Naseeb · Simulasi Kehidupan",
+  "short_name": "Naseeb",
+  "description": "Simulasi kehidupan interaktif. Pilihanmu membentuk jalan ceritamu.",
+  "lang": "id",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f6f8fb",
+  "theme_color": "#f6f8fb",
+  "icons": [
+    {
+      "src": "/icons/naseeb-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/naseeb-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/naseeb-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

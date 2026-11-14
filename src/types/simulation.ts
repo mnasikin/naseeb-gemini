@@ -82,3 +82,23 @@ export interface ActiveSession {
   savedAt: string;
 }
 
+export interface SavedGame {
+  revision: number;
+  activeSession: ActiveSession | null;
+}
+
+export interface GameData extends SavedGame {
+  archives: ArchivedLife[];
+}
+
+export interface GameUpdate extends SavedGame {
+  archivedLife?: ArchivedLife;
+}
+
+export interface AccountData {
+  id: string;
+  username: string;
+  game: GameData;
+  geminiConfigured: boolean;
+}
+

@@ -6,12 +6,14 @@ import { FateCardModal } from './FateCardModal';
 
 interface ArchiveViewProps {
   archives: ArchivedLife[];
+  isLoading: boolean;
   onDeleteArchive: (id: string) => void;
   onStartNew: () => void;
 }
 
 export function ArchiveView({
   archives,
+  isLoading,
   onDeleteArchive,
   onStartNew,
 }: ArchiveViewProps) {
@@ -29,11 +31,12 @@ export function ArchiveView({
             Belum Ada Arsip Nasib
           </h2>
           <p className="text-sm text-slate-600 mb-6 max-w-md mx-auto">
-            Selesaikan satu perjalanan hidup sampai tamat. Semua cerita yang udah selesai bakal otomatis kesimpan di browser ini biar bisa kamu bandingin.
+            Selesaikan satu perjalanan hidup sampai tamat. Cerita yang sudah selesai otomatis tersimpan di akun kamu.
           </p>
           <button
             type="button"
             onClick={onStartNew}
+            disabled={isLoading}
             className="px-5 py-2.5 text-sm font-semibold text-white bg-blue-600 rounded-xl sm:rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap min-h-[44px]"
           >
             Mulai Main Baru
@@ -57,6 +60,7 @@ export function ArchiveView({
         <button
           type="button"
           onClick={onStartNew}
+          disabled={isLoading}
           className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 rounded-xl sm:rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap shrink-0 self-start sm:self-auto min-h-[44px]"
         >
           Main Baru
@@ -116,6 +120,7 @@ export function ArchiveView({
                     <button
                       type="button"
                       onClick={() => onDeleteArchive(item.id)}
+                      disabled={isLoading}
                       aria-label={`Hapus arsip ${item.character.name}`}
                       className="min-h-[44px] min-w-[44px] flex items-center justify-center text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
                     >

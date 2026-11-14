@@ -17,11 +17,6 @@ interface StoryStageProps {
   onOpenTimeline: () => void;
 }
 
-function isDialogueParagraph(text: string): boolean {
-  const trimmed = text.trim();
-  return trimmed.startsWith('"') || trimmed.startsWith('“');
-}
-
 export function StoryStage({
   cardRef,
   character,
@@ -45,7 +40,7 @@ export function StoryStage({
 
   const paragraphs = chapter.narrative
     .split(/\n+/)
-    .map((p) => p.trim())
+    .map((paragraph) => paragraph.trim().replace(/^(?:>\s*)+/, ''))
     .filter(Boolean);
 
   const handleOptionClick = (option: StoryOption) => {
@@ -126,28 +121,21 @@ export function StoryStage({
       </header>
 
       <div className="py-7 space-y-4 max-w-[65ch]">
-        {paragraphs.map((paragraph, index) => {
-          const isDialogue = isDialogueParagraph(paragraph);
-          return (
-            <motion.p
-              key={index}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{
-                duration: 0.28,
-                delay: 0.06 + index * 0.07,
-                ease: [0.16, 1, 0.3, 1],
-              }}
-              className={
-                isDialogue
-                  ? 'text-[16px] leading-[1.75] text-slate-900 bg-slate-50/90 border border-slate-200/80 rounded-lg px-4 py-3'
-                  : 'text-[16px] leading-[1.75] text-slate-800'
-              }
-            >
-              {paragraph}
-            </motion.p>
-          );
-        })}
+        {paragraphs.map((paragraph, index) => (
+          <motion.p
+            key={index}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{
+              duration: 0.28,
+              delay: Math.min(0.06 + index * 0.07, 0.34),
+              ease: [0.16, 1, 0.3, 1],
+            }}
+            className="text-[16px] leading-[1.75] text-slate-800"
+          >
+            {paragraph}
+          </motion.p>
+        ))}
       </div>
 
       {error && (
@@ -355,6 +343,7 @@ export function StoryStage({
                 whileHover={{ scale: 1.015 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={onRestart}
+                disabled={isLoading}
                 className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-slate-900 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 min-h-[44px]"
               >
                 <RotateCcw className="w-4 h-4" />

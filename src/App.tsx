@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
-import { Clock, Maximize2, Minimize2, RotateCcw } from 'lucide-react';
+import { Clock, KeyRound, LogOut, Maximize2, Minimize2, RotateCcw } from 'lucide-react';
+import { AccountGate } from './components/AccountGate';
 import { ArchiveView } from './components/ArchiveView';
 import { CharacterDossier } from './components/CharacterDossier';
 import { CharacterSetup } from './components/CharacterSetup';
+import { GeminiKeyDialog, type GeminiKeyDialogMode } from './components/GeminiKeyDialog';
 import { LivingBackground } from './components/LivingBackground';
 import { MobileBottomNav, type ActiveTab } from './components/MobileBottomNav';
 import { MobileCharacterBar } from './components/MobileCharacterBar';
@@ -16,70 +18,12 @@ import {
   isFullscreenSupported,
 } from './utils/fullscreen';
 import type {
-  ActiveSession,
-  ArchivedLife,
-  ChapterResponse,
-  CharacterState,
+  AccountData,
   FamilyClass,
+  GameData,
+  GameUpdate,
   GenderOption,
-  TimelineEntry,
 } from './types/simulation';
-
-const ARCHIVE_STORAGE_KEY = 'naseeb_archives_v1';
-const SESSION_STORAGE_KEY = 'naseeb_active_session_v1';
-
-function loadArchives(): ArchivedLife[] {
-  try {
-    const raw =
-      localStorage.getItem(ARCHIVE_STORAGE_KEY) ||
-      localStorage.getItem('jejak_hidup_archives_v1');
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveArchives(items: ArchivedLife[]) {
-  try {
-    localStorage.setItem(ARCHIVE_STORAGE_KEY, JSON.stringify(items));
-  } catch {
-    // Ignore storage quota issues gracefully
-  }
-}
-
-function loadActiveSession(): ActiveSession | null {
-  try {
-    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<ActiveSession>;
-    if (!parsed.character || !parsed.currentChapter || typeof parsed.turn !== 'number') {
-      return null;
-    }
-    return {
-      character: parsed.character,
-      currentChapter: parsed.currentChapter,
-      turn: parsed.turn,
-      timeline: Array.isArray(parsed.timeline) ? parsed.timeline : [],
-      savedAt: parsed.savedAt || new Date().toISOString(),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function saveActiveSession(session: ActiveSession | null) {
-  try {
-    if (!session) {
-      localStorage.removeItem(SESSION_STORAGE_KEY);
-      return;
-    }
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-  } catch {
-    // Ignore storage quota issues gracefully
-  }
-}
 
 function scrollToTop() {
   if (typeof window === 'undefined') return;
@@ -94,18 +38,27 @@ function scrollToTop() {
 }
 
 export default function App() {
-  const [initialSession] = useState<ActiveSession | null>(() => loadActiveSession());
+  return (
+    <AccountGate>
+      {(account, onLogout, onSessionLost) => (
+        <Game key={account.id} account={account} onLogout={onLogout} onSessionLost={onSessionLost} />
+      )}
+    </AccountGate>
+  );
+}
 
+function Game({ account, onLogout, onSessionLost }: {
+  account: AccountData;
+  onLogout: () => Promise<void>;
+  onSessionLost: () => void;
+}) {
   const [activeTab, setActiveTab] = useState<ActiveTab>('simulation');
-  const [character, setCharacter] = useState<CharacterState | null>(
-    initialSession?.character ?? null,
-  );
-  const [currentChapter, setCurrentChapter] = useState<ChapterResponse | null>(
-    initialSession?.currentChapter ?? null,
-  );
-  const [turn, setTurn] = useState<number>(initialSession?.turn ?? 1);
-  const [timeline, setTimeline] = useState<TimelineEntry[]>(initialSession?.timeline ?? []);
-  const [archives, setArchives] = useState<ArchivedLife[]>(() => loadArchives());
+  const [game, setGame] = useState(account.game);
+  const { revision, activeSession, archives } = game;
+  const character = activeSession?.character ?? null;
+  const currentChapter = activeSession?.currentChapter ?? null;
+  const turn = activeSession?.turn ?? 1;
+  const timeline = activeSession?.timeline ?? [];
 
   const storyCardRef = useRef<HTMLElement | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -113,6 +66,49 @@ export default function App() {
   const [lastAttemptedAnswer, setLastAttemptedAnswer] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(() => isCurrentlyFullscreen());
   const fullscreenAvailable = isFullscreenSupported();
+  const [keyDialog, setKeyDialog] = useState<GeminiKeyDialogMode | null>(account.geminiConfigured ? null : 'setup');
+  const closeKeyDialog = useCallback(() => setKeyDialog(null), []);
+
+  const openKeySettings = () => setKeyDialog('manage');
+
+  async function refreshGame() {
+    const response = await fetch('/api/game', { headers: { 'X-Naseeb-Account': account.id } });
+    if (response.status === 401) {
+      onSessionLost();
+      return;
+    }
+    if (!response.ok) throw new Error('Progres belum bisa dimuat. Coba lagi ya.');
+    const latest: GameData = await response.json();
+    setGame(latest);
+  }
+
+  async function requestGameUpdate(url: string, body: Record<string, unknown>): Promise<GameUpdate> {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Naseeb-Account': account.id },
+      body: JSON.stringify({ ...body, revision }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      if (response.status === 401) onSessionLost();
+      if (response.status === 403) setKeyDialog('manage');
+      if (response.status === 428) setKeyDialog('setup');
+      if (response.status === 409) {
+        setLastAttemptedAnswer(null);
+        await refreshGame();
+      }
+      throw new Error(data?.error || 'Progres belum bisa diperbarui. Coba lagi ya.');
+    }
+    return data;
+  }
+
+  function applyUpdate(update: GameUpdate) {
+    setGame((previous) => ({
+      revision: update.revision,
+      activeSession: update.activeSession,
+      archives: update.archivedLife ? [update.archivedLife, ...previous.archives] : previous.archives,
+    }));
+  }
 
   const scrollToStoryCard = () => {
     if (typeof window === 'undefined') return;
@@ -124,24 +120,6 @@ export default function App() {
       });
     });
   };
-
-  useEffect(() => {
-    saveArchives(archives);
-  }, [archives]);
-
-  useEffect(() => {
-    if (character && currentChapter) {
-      saveActiveSession({
-        character,
-        currentChapter,
-        turn,
-        timeline,
-        savedAt: new Date().toISOString(),
-      });
-    } else {
-      saveActiveSession(null);
-    }
-  }, [character, currentChapter, turn, timeline]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -168,6 +146,7 @@ export default function App() {
     gender: GenderOption,
     familyClass: FamilyClass,
   ) => {
+    if (isLoading) return;
     // Trigger browser fullscreen synchronously inside user click/submit gesture
     enterFullscreen();
 
@@ -176,21 +155,7 @@ export default function App() {
     setLastAttemptedAnswer(null);
 
     try {
-      const response = await fetch('/api/story/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, gender, familyClass }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error || 'Gagal mulai cerita nih.');
-      }
-
-      setCharacter(data.character);
-      setCurrentChapter(data.chapter);
-      setTurn(1);
-      setTimeline([]);
+      applyUpdate(await requestGameUpdate('/api/story/start', { name, gender, familyClass }));
       setActiveTab('simulation');
       scrollToStoryCard();
     } catch (err) {
@@ -207,64 +172,10 @@ export default function App() {
     setError(null);
     setLastAttemptedAnswer(answer);
 
-    const nextTurn = turn + 1;
-    const newEntry: TimelineEntry = {
-      turn,
-      phase: currentChapter.lifePhase,
-      chapterTitle: currentChapter.chapterTitle,
-      narrative: currentChapter.narrative,
-      question: currentChapter.dilemmaQuestion,
-      chosenAnswer: answer,
-      consequenceNote: '',
-      statDeltas: { health: 0, finance: 0, career: 0, relationships: 0, happiness: 0 },
-      statsAfter: character.stats,
-    };
-
     try {
-      const response = await fetch('/api/story/next', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          character,
-          turn: nextTurn,
-          history: [...timeline, newEntry],
-          selectedAnswer: answer,
-        }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error || 'Gagal lanjutin cerita nih.');
-      }
-
-      const updatedCharacter: CharacterState = data.character;
-      const nextChapter: ChapterResponse = data.chapter;
-
-      const completedEntry: TimelineEntry = {
-        ...newEntry,
-        consequenceNote: nextChapter.consequenceNote,
-        statDeltas: nextChapter.statDeltas,
-        statsAfter: updatedCharacter.stats,
-      };
-
-      const nextTimeline = [...timeline, completedEntry];
-      setCharacter(updatedCharacter);
-      setCurrentChapter(nextChapter);
-      setTurn(nextTurn);
-      setTimeline(nextTimeline);
+      applyUpdate(await requestGameUpdate('/api/story/next', { selectedAnswer: answer }));
       setLastAttemptedAnswer(null);
       scrollToStoryCard();
-
-      if (nextChapter.isEnding && nextChapter.endingSummary) {
-        const archived: ArchivedLife = {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          completedAt: new Date().toISOString(),
-          character: updatedCharacter,
-          endingSummary: nextChapter.endingSummary,
-          timeline: nextTimeline,
-        };
-        setArchives((prev) => [archived, ...prev]);
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Gagal lanjutin cerita nih.');
     } finally {
@@ -278,17 +189,21 @@ export default function App() {
     }
   };
 
-  const handleReset = () => {
-    exitFullscreen();
-    setCharacter(null);
-    setCurrentChapter(null);
-    setTurn(1);
-    setTimeline([]);
+  const handleReset = async () => {
+    if (isLoading) return;
+    setIsLoading(true);
     setError(null);
     setLastAttemptedAnswer(null);
-    setActiveTab('simulation');
-    saveActiveSession(null);
-    scrollToTop();
+    try {
+      applyUpdate(await requestGameUpdate('/api/game/reset', {}));
+      exitFullscreen();
+      setActiveTab('simulation');
+      scrollToTop();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Belum bisa mulai ulang. Coba lagi ya.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleConcludeEarly = async () => {
@@ -297,35 +212,9 @@ export default function App() {
     setError(null);
 
     try {
-      const response = await fetch('/api/story/end', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          character,
-          turn,
-          history: timeline,
-        }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error || 'Gagal nyimpulin nasib akhir.');
-      }
-
-      const nextChapter: ChapterResponse = data.chapter;
-      setCurrentChapter(nextChapter);
+      applyUpdate(await requestGameUpdate('/api/story/end', {}));
+      setLastAttemptedAnswer(null);
       scrollToStoryCard();
-
-      if (nextChapter.isEnding && nextChapter.endingSummary) {
-        const archived: ArchivedLife = {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          completedAt: new Date().toISOString(),
-          character,
-          endingSummary: nextChapter.endingSummary,
-          timeline,
-        };
-        setArchives((prev) => [archived, ...prev]);
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Gagal nyimpulin nasib akhir.');
     } finally {
@@ -333,11 +222,66 @@ export default function App() {
     }
   };
 
-  const handleDeleteArchive = (id: string) => {
-    setArchives((prev) => prev.filter((item) => item.id !== id));
+  const handleDeleteArchive = async (id: string) => {
+    if (isLoading) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/game/archives/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { 'X-Naseeb-Account': account.id },
+      });
+      if (response.status === 401) {
+        onSessionLost();
+        return;
+      }
+      if (!response.ok) throw new Error('Arsip belum bisa dihapus. Coba lagi ya.');
+      setGame((previous) => ({ ...previous, archives: previous.archives.filter((item) => item.id !== id) }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Arsip belum bisa dihapus. Coba lagi ya.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (isLoading) return;
+    setIsLoading(true);
+    try {
+      exitFullscreen();
+      await onLogout();
+    } catch {
+      setError('Belum bisa keluar. Coba lagi ya.');
+      setIsLoading(false);
+    }
   };
 
   const isImmersivePlay = activeTab === 'simulation' && Boolean(character && currentChapter);
+  const keySettingsButton = (
+    <button
+      type="button"
+      aria-label="Kelola API key Gemini"
+      title="Kelola API key Gemini"
+      onClick={openKeySettings}
+      disabled={isLoading}
+      className="inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-medium text-slate-600 hover:bg-white hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-50"
+    >
+      <KeyRound aria-hidden="true" className="h-4 w-4" />
+      <span className="hidden lg:inline">API key</span>
+    </button>
+  );
+  const logoutButton = (
+    <button
+      type="button"
+      aria-label="Keluar dari akun"
+      title={`Keluar dari akun ${account.username}`}
+      onClick={handleLogout}
+      disabled={isLoading}
+      className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg px-2 text-slate-600 hover:bg-white hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-50"
+    >
+      <LogOut aria-hidden="true" className="h-4 w-4" />
+    </button>
+  );
 
   return (
     <MotionConfig reducedMotion="user">
@@ -395,22 +339,28 @@ export default function App() {
                 </button>
               </nav>
 
-              <div className="shrink-0">
+              <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+                {keySettingsButton}
                 <motion.button
                   type="button"
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.97 }}
                   onClick={handleReset}
+                  disabled={isLoading}
                   className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 min-h-[40px]"
                 >
                   Main Baru
                 </motion.button>
+                {logoutButton}
               </div>
             </div>
           </header>
         )}
 
         <main className={`flex-1 ${isImmersivePlay ? 'pb-8' : 'pb-20 md:pb-8'}`}>
+          {activeTab !== 'simulation' && error && (
+            <p role="alert" className="mx-auto mt-4 max-w-5xl px-4 text-sm text-red-700">{error}</p>
+          )}
           <AnimatePresence mode="wait">
             {activeTab === 'simulation' && (
               <motion.div
@@ -429,19 +379,21 @@ export default function App() {
                 ) : (
                   <section className="max-w-6xl mx-auto px-4 sm:px-6 py-4 sm:py-6 lg:py-8">
                     {/* Minimal distraction-free immersive play controls */}
-                    <div className="flex items-center justify-between gap-4 mb-4 sm:mb-6">
+                    <div className="flex items-center justify-between gap-2 mb-4 sm:mb-6">
                       <span className="font-editorial text-lg font-semibold text-slate-900 whitespace-nowrap shrink-0">
                         Naseeb
                       </span>
 
                       <div className="flex items-center gap-1.5 sm:gap-2">
+                        {keySettingsButton}
                         <button
                           type="button"
                           onClick={() => setActiveTab('timeline')}
+                          aria-label="Linimasa"
                           className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-white/80 rounded-lg transition-colors whitespace-nowrap min-h-[44px]"
                         >
                           <Clock className="w-3.5 h-3.5" />
-                          <span>Linimasa</span>
+                          <span className="hidden sm:inline">Linimasa</span>
                         </button>
 
                         {fullscreenAvailable && (
@@ -468,11 +420,14 @@ export default function App() {
                         <button
                           type="button"
                           onClick={handleReset}
+                          aria-label="Main Baru"
+                          disabled={isLoading}
                           className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white/85 border border-slate-200 hover:bg-white rounded-lg transition-colors whitespace-nowrap min-h-[44px]"
                         >
                           <RotateCcw className="w-3.5 h-3.5" />
-                          <span>Main Baru</span>
+                          <span className="hidden min-[375px]:inline">Main Baru</span>
                         </button>
+                        {logoutButton}
                       </div>
                     </div>
 
@@ -542,6 +497,7 @@ export default function App() {
               >
                 <ArchiveView
                   archives={archives}
+                  isLoading={isLoading}
                   onDeleteArchive={handleDeleteArchive}
                   onStartNew={handleReset}
                 />
@@ -555,7 +511,7 @@ export default function App() {
             <footer className="hidden md:block border-t border-slate-200/90 bg-white/85 backdrop-blur-md mt-12">
               <div className="max-w-6xl mx-auto px-6 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
                 <span>Naseeb · Simulasi Hidup Interaktif</span>
-                <span>Progres dan arsip kesimpan otomatis di browser kamu.</span>
+                <span>Progres dan arsip tersimpan otomatis di akun kamu.</span>
               </div>
             </footer>
 
@@ -568,6 +524,15 @@ export default function App() {
           </>
         )}
       </div>
+      {keyDialog && (
+        <GeminiKeyDialog
+          key={keyDialog}
+          initialMode={keyDialog}
+          accountId={account.id}
+          onClose={closeKeyDialog}
+          onSessionLost={onSessionLost}
+        />
+      )}
     </MotionConfig>
   );
 }

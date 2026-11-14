@@ -3,3 +3,9 @@ import App from './App.tsx';
 import './index.css';
 
 createRoot(document.getElementById('root')!).render(<App />);
+
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  void navigator.serviceWorker.register('/sw.js').catch((error) => {
+    console.warn('Service worker Naseeb tidak bisa didaftarkan.', error);
+  });
+}
