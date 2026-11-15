@@ -67,6 +67,9 @@ export function TimelineView({
             { label: 'Karier', val: entry.statDeltas.career },
             { label: 'Relasi', val: entry.statDeltas.relationships },
             { label: 'Bahagia', val: entry.statDeltas.happiness },
+            ...(entry.statDeltas.chemistry ?? []).map(({ name, delta }) => ({
+              label: `Chemistry · ${name}`, val: delta,
+            })),
           ].filter((d) => d.val !== 0);
 
           return (

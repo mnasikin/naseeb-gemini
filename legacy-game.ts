@@ -13,17 +13,30 @@ function isStats(value: unknown) {
     .every((field) => typeof value[field] === 'number' && Number.isFinite(value[field]));
 }
 
+function isChemistry(value: unknown, field: 'points' | 'delta', min: number, max: number) {
+  return value === undefined || (Array.isArray(value) && value.every((person) =>
+    isRecord(person) && typeof person.name === 'string' && person.name.trim() !== '' &&
+    (person.gender === 'Laki-laki' || person.gender === 'Perempuan' || person.gender === 'Non-biner') &&
+    typeof person[field] === 'number' && Number.isInteger(person[field]) && person[field] >= min && person[field] <= max,
+  ));
+}
+
+function isStatChanges(value: unknown) {
+  return isRecord(value) && isStats(value) && isChemistry(value.chemistry, 'delta', -5, 5);
+}
+
 function isCharacter(value: unknown) {
   return isRecord(value) && hasStrings(value, ['name', 'gender', 'phase']) &&
     (value.familyClass === undefined || typeof value.familyClass === 'string') &&
-    isStats(value.stats) && Array.isArray(value.traits) && value.traits.every((trait) => typeof trait === 'string');
+    isStats(value.stats) && isChemistry(value.chemistry, 'points', 0, 100) &&
+    Array.isArray(value.traits) && value.traits.every((trait) => typeof trait === 'string');
 }
 
 function isTimeline(value: unknown) {
   return Array.isArray(value) && value.every((entry) =>
     isRecord(entry) && Number.isSafeInteger(entry.turn) &&
     hasStrings(entry, ['phase', 'chapterTitle', 'narrative', 'question', 'chosenAnswer', 'consequenceNote']) &&
-    isStats(entry.statDeltas) && isStats(entry.statsAfter),
+    isStatChanges(entry.statDeltas) && isStats(entry.statsAfter),
   );
 }
 
@@ -34,7 +47,7 @@ function isEnding(value: unknown) {
 
 function isChapter(value: unknown) {
   return isRecord(value) && hasStrings(value, ['chapterTitle', 'lifePhase', 'narrative', 'dilemmaQuestion', 'consequenceNote']) &&
-    isStats(value.statDeltas) && typeof value.isEnding === 'boolean' &&
+    isStatChanges(value.statDeltas) && typeof value.isEnding === 'boolean' &&
     (value.newTrait === undefined || typeof value.newTrait === 'string') &&
     (value.endingSummary === undefined || isEnding(value.endingSummary)) &&
     Array.isArray(value.options) && value.options.every((option) => isRecord(option) && hasStrings(option, ['id', 'label', 'hint']));

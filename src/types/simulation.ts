@@ -16,6 +16,16 @@ export interface CharacterStats {
   happiness: number;
 }
 
+export interface ChemistryScore {
+  name: string;
+  gender: GenderOption;
+  points: number;
+}
+
+export interface StatChanges extends CharacterStats {
+  chemistry?: Array<Omit<ChemistryScore, 'points'> & { delta: number }>;
+}
+
 export interface StoryOption {
   id: string;
   label: string;
@@ -30,6 +40,7 @@ export interface CharacterState {
   stats: CharacterStats;
   traits: string[];
   relationship?: RelationshipProfile;
+  chemistry?: ChemistryScore[];
 }
 
 export interface TimelineEntry {
@@ -40,7 +51,7 @@ export interface TimelineEntry {
   question: string;
   chosenAnswer: string;
   consequenceNote: string;
-  statDeltas: CharacterStats;
+  statDeltas: StatChanges;
   statsAfter: CharacterStats;
 }
 
@@ -58,7 +69,7 @@ export interface ChapterResponse {
   narrative: string;
   dilemmaQuestion: string;
   consequenceNote: string;
-  statDeltas: CharacterStats;
+  statDeltas: StatChanges;
   newTrait?: string;
   relationshipUpdate?: RelationshipProfile;
   options: StoryOption[];

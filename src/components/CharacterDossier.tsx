@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
 import type { CharacterState, CharacterStats } from '../types/simulation';
 import { AnimatedNumber } from './AnimatedNumber';
+import { ChemistryScores } from './ChemistryScores';
 import { StageIllustration } from './StageIllustration';
 
 interface CharacterDossierProps {
@@ -16,7 +17,7 @@ const STAT_META: { key: keyof CharacterStats; label: string }[] = [
   { key: 'health', label: 'Kesehatan' },
   { key: 'finance', label: 'Keuangan' },
   { key: 'career', label: 'Karier & Ilmu' },
-  { key: 'relationships', label: 'Relasi' },
+  { key: 'relationships', label: 'Relasi Sosial' },
   { key: 'happiness', label: 'Kebahagiaan' },
 ];
 
@@ -152,6 +153,10 @@ export function CharacterDossier({
             })}
           </div>
         </div>
+
+        <section className="pt-5 border-t border-slate-100">
+          <ChemistryScores scores={character.chemistry} />
+        </section>
 
         <div className="pt-5 border-t border-slate-100">
           <h3 className="text-xs font-semibold tracking-wide text-slate-500 mb-2">

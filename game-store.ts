@@ -37,6 +37,7 @@ export function createGameStore(db: DatabaseSync) {
       happiness REAL NOT NULL,
       traits TEXT NOT NULL,
       relationship TEXT NOT NULL,
+      chemistry TEXT NOT NULL DEFAULT '[]',
       chapter_title TEXT NOT NULL,
       life_phase TEXT NOT NULL,
       narrative TEXT NOT NULL,
@@ -74,6 +75,13 @@ export function createGameStore(db: DatabaseSync) {
     ) STRICT;
   `);
 
+  transaction(db, () => {
+    const columns = db.prepare('PRAGMA table_info(active_games)').all();
+    if (!columns.some(({ name }) => name === 'chemistry')) {
+      db.exec("ALTER TABLE active_games ADD COLUMN chemistry TEXT NOT NULL DEFAULT '[]'");
+    }
+  });
+
   const revision = db.prepare('SELECT game_revision FROM users WHERE id = ?');
   const advance = db.prepare('UPDATE users SET game_revision = game_revision + 1 WHERE id = ? AND game_revision = ?');
   const active = db.prepare('SELECT * FROM active_games WHERE user_id = ?');
@@ -82,14 +90,15 @@ export function createGameStore(db: DatabaseSync) {
   const writeActive = db.prepare(`
     INSERT INTO active_games (
       user_id, turn, saved_at, name, gender, family_class, phase, health, finance, career, relationships, happiness,
-      traits, relationship, chapter_title, life_phase, narrative, dilemma_question, consequence_note, stat_deltas,
+      traits, relationship, chemistry, chapter_title, life_phase, narrative, dilemma_question, consequence_note, stat_deltas,
       new_trait, relationship_update, options, is_ending, ending_summary
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (user_id) DO UPDATE SET
       turn = excluded.turn, saved_at = excluded.saved_at, name = excluded.name, gender = excluded.gender,
       family_class = excluded.family_class, phase = excluded.phase, health = excluded.health, finance = excluded.finance,
       career = excluded.career, relationships = excluded.relationships, happiness = excluded.happiness,
-      traits = excluded.traits, relationship = excluded.relationship, chapter_title = excluded.chapter_title,
+      traits = excluded.traits, relationship = excluded.relationship, chemistry = excluded.chemistry,
+      chapter_title = excluded.chapter_title,
       life_phase = excluded.life_phase, narrative = excluded.narrative, dilemma_question = excluded.dilemma_question,
       consequence_note = excluded.consequence_note, stat_deltas = excluded.stat_deltas, new_trait = excluded.new_trait,
       relationship_update = excluded.relationship_update, options = excluded.options, is_ending = excluded.is_ending,
@@ -113,7 +122,8 @@ export function createGameStore(db: DatabaseSync) {
     writeActive.run(
       userId, turn, savedAt, character.name, character.gender, character.familyClass ?? 'Middle', character.phase,
       health, finance, career, relationships, happiness, JSON.stringify(character.traits),
-      JSON.stringify(character.relationship ?? null), chapter.chapterTitle, chapter.lifePhase, chapter.narrative,
+      JSON.stringify(character.relationship ?? null), JSON.stringify(character.chemistry ?? []),
+      chapter.chapterTitle, chapter.lifePhase, chapter.narrative,
       chapter.dilemmaQuestion, chapter.consequenceNote, JSON.stringify(chapter.statDeltas), chapter.newTrait ?? null,
       JSON.stringify(chapter.relationshipUpdate ?? null), JSON.stringify(chapter.options), Number(chapter.isEnding),
       JSON.stringify(chapter.endingSummary ?? null),
@@ -148,6 +158,7 @@ export function createGameStore(db: DatabaseSync) {
       },
       traits: unpack(row.traits),
       relationship: unpack<CharacterState['relationship']>(row.relationship) ?? undefined,
+      chemistry: unpack(row.chemistry),
     };
     const currentChapter: ChapterResponse = {
       chapterTitle: row.chapter_title as string,

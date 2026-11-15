@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { ArrowRight, Loader2, RotateCcw, Send, Share2 } from 'lucide-react';
 import type { ChapterResponse, CharacterState, StoryOption } from '../types/simulation';
 import { FateCardModal } from './FateCardModal';
+import { StoryMarkdown } from './StoryMarkdown';
 
 interface StoryStageProps {
   cardRef?: RefObject<HTMLElement | null>;
@@ -38,11 +39,6 @@ export function StoryStage({
     setPendingChoice(null);
   }, [turn, chapter.chapterTitle, chapter.isEnding]);
 
-  const paragraphs = chapter.narrative
-    .split(/\n+/)
-    .map((paragraph) => paragraph.trim().replace(/^(?:>\s*)+/, ''))
-    .filter(Boolean);
-
   const handleOptionClick = (option: StoryOption) => {
     if (isLoading) return;
     setPendingChoice(option.label);
@@ -66,6 +62,9 @@ export function StoryStage({
           { label: 'Karier', val: chapter.statDeltas.career },
           { label: 'Relasi', val: chapter.statDeltas.relationships },
           { label: 'Bahagia', val: chapter.statDeltas.happiness },
+          ...(chapter.statDeltas.chemistry ?? []).map(({ name, delta }) => ({
+            label: `Chemistry · ${name}`, val: delta,
+          })),
         ].filter((d) => d.val !== 0)
       : [];
 
@@ -120,23 +119,7 @@ export function StoryStage({
         )}
       </header>
 
-      <div className="py-7 space-y-4 max-w-[65ch]">
-        {paragraphs.map((paragraph, index) => (
-          <motion.p
-            key={index}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{
-              duration: 0.28,
-              delay: Math.min(0.06 + index * 0.07, 0.34),
-              ease: [0.16, 1, 0.3, 1],
-            }}
-            className="text-[16px] leading-[1.75] text-slate-800"
-          >
-            {paragraph}
-          </motion.p>
-        ))}
-      </div>
+      <StoryMarkdown text={chapter.narrative} className="py-7 space-y-4 max-w-[65ch] text-[16px] leading-[1.75] text-slate-800" />
 
       {error && (
         <motion.div
@@ -194,7 +177,7 @@ export function StoryStage({
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex items-start gap-3.5">
                       <span className="font-mono tabular-nums text-xs font-semibold text-slate-500 mt-1 shrink-0">
-                        0{idx + 1}
+                        {String.fromCharCode(65 + idx)}
                       </span>
                       <div>
                         <div className="text-[15px] font-semibold text-slate-900 group-hover:text-blue-700 transition-colors">
@@ -238,7 +221,7 @@ export function StoryStage({
               />
               <motion.button
                 type="submit"
-                disabled={isLoading || customAnswer.trim().length < 3}
+                disabled={isLoading || !customAnswer.trim()}
                 whileHover={{ scale: 1.01 }}
                 whileTap={{ scale: 0.98 }}
                 className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-semibold text-white bg-slate-900 rounded-xl sm:rounded-lg hover:bg-slate-800 transition-colors disabled:opacity-45 disabled:cursor-not-allowed whitespace-nowrap shrink-0 min-h-[44px]"
@@ -289,23 +272,7 @@ export function StoryStage({
               </p>
             </div>
 
-            <div className="space-y-4 max-w-[65ch]">
-              {chapter.endingSummary.epilogue
-                .split(/\n+/)
-                .map((p) => p.trim())
-                .filter(Boolean)
-                .map((p, idx) => (
-                  <motion.p
-                    key={idx}
-                    initial={{ opacity: 0, y: 6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.08 + idx * 0.06, duration: 0.28 }}
-                    className="text-[15px] leading-[1.75] text-slate-700"
-                  >
-                    {p}
-                  </motion.p>
-                ))}
-            </div>
+            <StoryMarkdown text={chapter.endingSummary.epilogue} className="space-y-4 max-w-[65ch] text-[15px] leading-[1.75] text-slate-700" />
 
             <div className="pt-6 border-t border-slate-100">
               <h3 className="text-xs font-semibold tracking-wide text-slate-500 mb-3">

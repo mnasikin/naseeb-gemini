@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express, { type Request, type Response } from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ApiError, GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import { ApiError, GoogleGenAI, ThinkingLevel, Type, type Schema } from '@google/genai';
 import { openAccountStore, SESSION_DURATION } from './account-store.ts';
 import { readLegacyGame } from './legacy-game.ts';
 import type {
@@ -10,11 +10,14 @@ import type {
   ChapterResponse,
   CharacterState,
   CharacterStats,
+  ChemistryScore,
   EndingSummary,
   FamilyClass,
   GenderOption,
   RelationshipProfile,
   RelationshipStatus,
+  StatChanges,
+  StoryOption,
   TimelineEntry,
 } from './src/types/simulation.ts';
 
@@ -23,6 +26,8 @@ const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
 const MODEL_NAME = 'gemini-3.1-flash-lite';
+const STAT_DELTA_LIMIT = 5;
+const STAT_DELTA_RANGE = `-${STAT_DELTA_LIMIT} sampai +${STAT_DELTA_LIMIT}`;
 const SESSION_COOKIE = 'naseeb_account';
 const LEGACY_COOKIE = 'naseeb_gemini_session';
 const accounts = openAccountStore(
@@ -72,10 +77,13 @@ function stripEmDash(text: string): string {
 }
 
 function sanitizeEndingSummary(raw: Partial<EndingSummary>): EndingSummary {
+  if (typeof raw?.epilogue !== 'string' || !raw.epilogue.trim()) {
+    throw new Error('Gemini returned an empty epilogue');
+  }
   return {
     archetypeTitle: stripEmDash(raw.archetypeTitle || 'Jejak Hidup Unik'),
     fateHeadline: stripEmDash(raw.fateHeadline || 'Perjalanan hidupmu akhirnya sampai di titik tenang.'),
-    epilogue: stripEmDash(raw.epilogue || 'Semua pilihan yang pernah kamu ambil kini tinggal jadi cerita yang membekas.'),
+    epilogue: stripEmDash(raw.epilogue.trim()),
     keyTurningPoints: Array.isArray(raw.keyTurningPoints)
       ? raw.keyTurningPoints.slice(0, 3).map((item) => stripEmDash(String(item)))
       : [],
@@ -85,7 +93,11 @@ function sanitizeEndingSummary(raw: Partial<EndingSummary>): EndingSummary {
 
 function clampDelta(val: unknown): number {
   const n = typeof val === 'number' && Number.isFinite(val) ? val : 0;
-  return Math.max(-35, Math.min(25, Math.round(n)));
+  return Math.max(-STAT_DELTA_LIMIT, Math.min(STAT_DELTA_LIMIT, Math.round(n)));
+}
+
+function appliedDelta(current: number, requested: unknown): number {
+  return clampStat(current + clampDelta(requested)) - current;
 }
 
 function normalizeStats(raw: Partial<CharacterStats> | undefined): CharacterStats {
@@ -106,6 +118,42 @@ function applyDeltas(current: CharacterStats, deltas: CharacterStats): Character
     relationships: clampStat(current.relationships + deltas.relationships),
     happiness: clampStat(current.happiness + deltas.happiness),
   };
+}
+
+function chemistryKey(name: string): string {
+  return name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function updateChemistry(character: CharacterState, updates: StatChanges['chemistry']) {
+  const scores = new Map((character.chemistry ?? []).map((person) => [chemistryKey(person.name), person]));
+  const changes: NonNullable<StatChanges['chemistry']> = [];
+  const changed = new Set<string>();
+  const playerKey = chemistryKey(character.name);
+
+  for (const update of Array.isArray(updates) ? updates : []) {
+    if (typeof update?.name !== 'string') continue;
+    const name = stripEmDash(update.name.trim());
+    const key = chemistryKey(name);
+    if (!key || key === playerKey || changed.has(key)) continue;
+
+    const previous = scores.get(key);
+    const gender = previous?.gender ?? update.gender;
+    if (gender !== 'Laki-laki' && gender !== 'Perempuan' && gender !== 'Non-biner') continue;
+    if (character.gender !== 'Non-biner' && (
+      gender === 'Non-biner' || gender === character.gender
+    )) continue;
+
+    const before = previous?.points ?? 0;
+    const delta = appliedDelta(before, update.delta);
+    if (delta === 0) continue;
+
+    changed.add(key);
+    const person: ChemistryScore = { name: previous?.name ?? name, gender, points: before + delta };
+    scores.set(key, person);
+    changes.push({ name: person.name, gender, delta });
+  }
+
+  return { scores: [...scores.values()], changes };
 }
 
 const VALID_REL_STATUSES: RelationshipStatus[] = [
@@ -171,12 +219,25 @@ const statDeltasSchema = {
   properties: {
     health: {
       type: Type.INTEGER,
-      description: 'Perubahan Kesehatan (-35 sampai 20). Jika kesehatan sudah kritis atau terjadi insiden fatal/kelelahan ekstrem, bisa turun drastis hingga membuat health mencapai 0.',
+      description: `Perubahan Kesehatan (${STAT_DELTA_RANGE}). Cerita tamat saat skor kesehatan setelah perubahan mencapai 0.`,
     },
-    finance: { type: Type.INTEGER, description: 'Perubahan Keuangan (-25 sampai 25).' },
-    career: { type: Type.INTEGER, description: 'Perubahan Karier & Ilmu (-25 sampai 25).' },
-    relationships: { type: Type.INTEGER, description: 'Perubahan Relasi Sosial/Keluarga (-25 sampai 25).' },
-    happiness: { type: Type.INTEGER, description: 'Perubahan Kebahagiaan (-25 sampai 25).' },
+    finance: { type: Type.INTEGER, description: `Perubahan Keuangan (${STAT_DELTA_RANGE}).` },
+    career: { type: Type.INTEGER, description: `Perubahan Karier & Ilmu (${STAT_DELTA_RANGE}).` },
+    relationships: { type: Type.INTEGER, description: `Perubahan Relasi umum dengan teman, keluarga, atau lingkungan (${STAT_DELTA_RANGE}).` },
+    happiness: { type: Type.INTEGER, description: `Perubahan Kebahagiaan (${STAT_DELTA_RANGE}).` },
+    chemistry: {
+      type: Type.ARRAY,
+      description: 'Perubahan Chemistry romantis per tokoh yang terlibat di bab ini. Satu entri per tokoh. Kosongkan jika tidak berubah.',
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          name: { type: Type.STRING, description: 'Nama tokoh seperti yang ditulis di cerita atau daftar Chemistry.' },
+          gender: { type: Type.STRING, enum: ['Laki-laki', 'Perempuan', 'Non-biner'] },
+          delta: { type: Type.INTEGER, description: `Perubahan Chemistry dengan tokoh ini (${STAT_DELTA_RANGE}).` },
+        },
+        required: ['name', 'gender', 'delta'],
+      },
+    },
   },
   required: ['health', 'finance', 'career', 'relationships', 'happiness'],
 };
@@ -195,11 +256,11 @@ const chapterSchema = {
     narrative: {
       type: Type.STRING,
       description:
-        'Adegan singkat (sekitar 60–120 kata) dalam paragraf pendek. Selipkan ucapan langsung dalam tanda kutip di antara tindakan dan reaksi tokoh. Isi dengan prosa cerita saja. Statistik, pertanyaan dilema, dan opsi punya field masing-masing.',
+        'Ceritakan adegan selengkap yang dibutuhkan, dengan paragraf yang nyaman dibaca. Sisipkan dialog langsung di antara tindakan dan reaksi tokoh. Tunjukkan kejadian yang memunculkan keputusan berikutnya. Statistik, pertanyaan, dan opsi punya field masing-masing.',
     },
     dilemmaQuestion: {
       type: Type.STRING,
-      description: 'Satu pertanyaan dilema yang tajam, ringkas, dan menuntut pilihan.',
+      description: 'Pertanyaan tentang satu keputusan yang belum diambil di akhir adegan. Semua opsi menjawab pertanyaan ini. Kosongkan kalau cerita tamat.',
     },
     consequenceNote: {
       type: Type.STRING,
@@ -238,15 +299,15 @@ const chapterSchema = {
         type: Type.OBJECT,
         properties: {
           id: { type: Type.STRING, description: 'ID singkat seperti opt_1.' },
-          label: { type: Type.STRING, description: 'Tindakan spesifik yang bisa langsung dilakukan pemain di adegan ini (maks 12 kata).' },
+          label: { type: Type.STRING, description: 'Tindakan spesifik yang menjawab dilema di akhir adegan. Sebut detail yang membantu pemain memahami pilihannya.' },
           hint: {
             type: Type.STRING,
-            description: 'Petunjuk singkat tentang risiko, biaya, atau peluang dari tindakan itu (maks 8 kata). Hindari angka statistik dan janji hasil pasti.',
+            description: 'Tampilkan efek yang mungkin terasa dan trade-off utamanya, misalnya "Hemat biaya, tapi waktu buat latihan kepotong." Hindari angka statistik dan hasil yang belum pasti.',
           },
         },
         required: ['id', 'label', 'hint'],
       },
-      description: 'Tepat 4 opsi keputusan yang bervariasi arahnya (bukan cuma kerja/karier semua).',
+      description: 'Empat tanggapan berbeda untuk dilema yang sama. Tiap opsi bisa dilakukan berdasarkan situasi dan detail yang sudah diceritakan. Kosongkan kalau cerita tamat.',
     },
   },
   required: [
@@ -275,7 +336,7 @@ const endingSchema = {
     epilogue: {
       type: Type.STRING,
       description:
-        'Epilog singkat namun membekas (2-3 paragraf pendek, total ~110 kata), boleh menyertakan satu kalimat terakhir/kenangan dialog yang paling melekat.',
+        'Epilog yang menyambung dari adegan terakhir dan menunjukkan dampak perjalanan karakter. Gunakan detail yang sudah muncul di cerita. Panjangnya mengikuti kebutuhan penutup.',
     },
     keyTurningPoints: {
       type: Type.ARRAY,
@@ -290,22 +351,24 @@ const endingSchema = {
   required: ['archetypeTitle', 'fateHeadline', 'epilogue', 'keyTurningPoints', 'lifeQuote'],
 };
 
-const SYSTEM_INSTRUCTION = `Kamu adalah penulis skenario simulasi kehidupan nyata (Naseeb) dalam Bahasa Indonesia kasual yang santai, natural, dan membekas.
+const SYSTEM_INSTRUCTION = `Lo jadi narator life simulator berbasis teks di Indonesia yang realistis. Pemain adalah karakter utamanya. Bangun adegan lewat prosa dan dialog.
 
 Gaya penulisan WAJIB:
-1. BAHASA KASUAL SEHARI-HARI: Pakai kata yang paling umum dipakai dalam obrolan sehari-hari. Campuran English boleh kalau memang lebih familiar, misalnya "subtitle", "deadline", atau "nge-chat". Hindari padanan baku yang terasa asing seperti "takarir" saat orang di adegan itu biasanya bilang "subtitle". Terapkan juga ke judul, pertanyaan, opsi, dan epilog. Narasi menyapa pemain dengan "kamu". Sesuaikan slang, sapaan, dan tingkat formalitas dengan lingkungan dan kedekatan antar tokoh.
-2. SINGKAT, PADAT, MEMBEKAS: Untuk satu bab, tulis sekitar 60–120 kata dalam paragraf pendek. Langsung masuk ke momen yang sedang terjadi dan sisakan ruang untuk tanggapan atau reaksi.
+1. BAHASA KASUAL SEHARI-HARI: Pakai kata yang umum di obrolan. Di narasi, sapa pemain dengan "lo". Gunakan "lo/gue" di dialog kalau cocok dengan hubungan tokohnya. Orang rumah, teman, dan orang yang baru dikenal bisa punya sapaan yang berbeda. Code-switching boleh kalau istilahnya lebih familiar, misalnya "subtitle", "deadline", atau "nge-chat". Terapkan gaya santai ke judul, pertanyaan, opsi, dan epilog.
+2. PANJANG MENGIKUTI ADEGAN: Biasanya 3–5 paragraf singkat per giliran. Adegan sederhana boleh lebih pendek. Percakapan, keputusan, atau momen penting boleh lebih panjang selama perlu untuk menunjukkan tindakan, reaksi, dan konsekuensinya.
 3. PERCAKAPAN DUA ARAH: Tulis percakapan seperti orang yang betulan lagi ngobrol. Tokoh bisa nyeletuk, bercanda, ragu, menyela, atau beda pendapat sesuai sifat dan kedekatannya. Bedakan cara bicara orang rumah, teman, dan rekan kerja. Sisipkan ucapan dalam tanda kutip di tengah prosa dan pakai tindakan atau reaksi untuk memperjelas pembicara. Karakter pemain boleh menanggapi sesuai pilihan terakhir. Hindari format skrip Nama: dialog dan blockquote Markdown.
-4. KONSEKUENSI NYATA: Sesuaikan dinamika cerita dengan nama, gender, kelas keluarga awal, fase cerita, dan statistik saat ini. JANGAN sebut atau hitung umur angka secara kaku, fokus ke alur kejadian dan momen hidupnya.
-5. ALUR TANPA BATAS BAB: Cerita terus jalan tanpa batas bab sampai kesehatan (health) menyentuh 0. Kalau health sudah tipis (< 25) atau ambil risiko ekstrem/burnout parah, kasih konsekuensi nyata yang bisa bikin health turun sampai 0.
+4. KONSEKUENSI NYATA: Sesuaikan akibat pilihan dengan situasi, kemampuan, hubungan, dan keputusan sebelumnya. Jujur atau ngasih ruang bisa memelihara kepercayaan meski hasil langsungnya kurang enak. Ngeles atau curang bisa menguntungkan sesaat dan belakangan ketahuan. Biarkan pemain sesekali salah langkah atau kena akibat lucu kalau masuk akal. Isi statDeltas dari akibat yang benar-benar terjadi di bab, pakai statistik game yang tersedia. Jangan hitung umur secara kaku.
+5. ALUR TANPA BATAS BAB: Perubahan tiap statistik per giliran berada dalam rentang ${STAT_DELTA_RANGE}. Bahkan pilihan berisiko tetap mengikuti rentang itu. Sesuaikan konsekuensinya dengan kondisi karakter. Cerita berlanjut sampai kesehatan menyentuh 0 atau pemain menutupnya.
 6. HUBUNGAN TUMBUH ALAMI: Perkenalkan tokoh baru sesuai perannya, misalnya teman, tetangga, atau rekan kerja. Kenalan, nongkrong, atau bersikap ramah saja tidak mengubah status. Pertahankan status sebelumnya sampai pilihan pemain mengarah ke romansa dan interaksi antar tokoh mendukungnya. Ketertarikan bisa tumbuh pelan, tetap sebatas teman, atau mereda sesuai pilihan pemain. Kenalkan calon pasangan di cerita sebelum status berkembang. Untuk keputusan besar seperti jadian atau menikah, beri pemain kesempatan memilih dan tunjukkan respons tokoh lain.
-7. VARIASI ALUR: Perhatikan beberapa bab terakhir. Variasikan jenis adegan, konflik, dan dilema sesuai apa yang sedang dijalani karakter. Pakai tema seperti keluarga, teman, kerja, hobi, kesehatan, dan urusan sehari-hari. Sesekali beri plot twist yang masuk akal, misalnya konsekuensi pilihan lama muncul lagi atau tokoh punya alasan yang baru terungkap. Bangun kejutan dari petunjuk atau kejadian yang sudah ada, hormati pilihan pemain, dan biarkan momen tenang punya tempat. Buat empat opsi dengan tindakan yang benar-benar berbeda dan sesuai adegan.
-8. FORMAT ADEGAN: Pakai baris baru ganda (\\n\\n) antarparagraf. Kalau pembicara berganti, mulai paragraf baru bila perlu agar percakapan jelas. Akhiri narasi pada momen yang membuka dilema. Taruh pertanyaan di dilemmaQuestion, pilihan di options, dan perubahan angka di statDeltas. Narasi cukup menunjukkan dampaknya lewat kejadian. Jangan tempel daftar stats, quest, pencapaian, atau pilihan A–D ke dalam narasi.
+7. VARIASI ALUR: Perhatikan beberapa bab terakhir. Variasikan adegan ringan, momen hening, dan momen emosional. Ambil humor dari keseharian, seperti gosip tetangga, orang tua yang kepo, atau salah paham kecil. Setiap beberapa giliran, beri ruang untuk masalah atau keputusan yang lebih berat kalau alurnya sudah mengarah ke sana. Bangun plot twist dari petunjuk atau keputusan sebelumnya, hormati pilihan pemain, dan biarkan konsekuensinya terasa.
+8. FORMAT ADEGAN: Pakai baris baru ganda (\\n\\n) antarparagraf. Selama cerita berlanjut, akhiri narasi tepat sebelum pemain mengambil keputusan. Taruh pertanyaan di dilemmaQuestion, empat opsi A–D di options secara berurutan tanpa menulis hurufnya di label, dan perubahan angka di statDeltas. Gunakan field itu supaya stats dan tombol pilihan bisa ditampilkan terpisah dari prosa.
 9. DILARANG PAKAI EM DASH: Jangan pernah pakai tanda pisah panjang / em dash (—) di narasi, dialog, judul, maupun opsi. Pakai koma, titik, atau kata sambung biasa.
 10. KEHIDUPAN INDONESIA MASA KINI: Pakai teknologi, kebiasaan, dan tekanan hidup yang masuk akal untuk tempat, fase hidup, kelas keluarga, dan kemampuan ekonomi karakter. Misalnya grup chat keluarga, pembayaran QR, jualan lewat marketplace, kerja hybrid, alat AI, atau kabar dari video pendek. Pilih detail yang memengaruhi adegan atau keputusan dan variasikan konteksnya. Sisakan ruang untuk interaksi tatap muka dan kebiasaan setempat.
 11. TREN DAN KONTINUITAS: Rujukan masa kini berlaku untuk latar awal dan suasana umum. Hormati periode, tempat, teknologi, dan kebiasaan yang sudah muncul di cerita. Kalau waktu berlalu, tunjukkan perubahan secara wajar seiring fase hidup karakter. Gunakan tren yang masuk akal bagi lingkungannya. Kalau ragu tentang meme, kabar, harga, atau fitur terbaru, pakai rujukan umum tanpa mengklaimnya sedang viral atau menyebut fakta yang belum pasti. Untuk epilog, ambil detail dari perjalanan yang sudah diceritakan.
-12. DILEMA LAHIR DARI ADEGAN: Perlihatkan tindakan yang dipilih pemain, lalu reaksi atau akibat konkretnya. Biarkan hal itu membuka keputusan berikutnya. Misalnya, bantu tetangga angkat galon, dia ingat kamu bisa desain, lalu malamnya dia chat minta bantuan bikin poster dadakan. Kalau waktu atau tempat berpindah, beri penanda singkat di prosa. Perubahan besar seperti menerima tawaran atau bikin janji baru tetap jadi pilihan pemain.
-13. TOKOH PUNYA URUSAN SENDIRI: Kenalkan tokoh lewat hal yang ia kerjakan, cara bicaranya, atau detail keseharian yang khas. Pakai lagi nama, kebiasaan, janji, dan urusan yang masih relevan. Tokoh lain boleh punya waktu terbatas, keberatan, atau alasan sendiri untuk membantu. Selipkan humor ringan dari situasi atau celetukan kalau suasananya pas. Saat ada dilema, beri empat tindakan yang merespons kejadian konkret tadi dan punya konsekuensi yang berbeda.`;
+12. DILEMA LAHIR DARI ADEGAN: Perlihatkan tindakan yang dipilih pemain, lalu reaksi atau akibat konkretnya. Biarkan hal itu membuka keputusan berikutnya. Kalau waktu atau tempat berpindah, beri penanda singkat di prosa. Perubahan besar seperti menerima tawaran atau bikin janji baru tetap jadi pilihan pemain.
+13. TOKOH PUNYA URUSAN SENDIRI: Kenalkan tokoh lewat kerjaan, cara bicara, atau kebiasaan yang khas. Ada tokoh yang cukup muncul sekali, ngobrol, lalu lanjut dengan hidupnya sendiri. Saat masih relevan, munculkan lagi janji, nama, detail kecil, atau celetukan dari giliran sebelumnya sebagai callback. Tokoh lain boleh punya batasan, keberatan, dan alasan sendiri untuk membantu.
+14. PERTANYAAN DAN PILIHAN NYAMBUNG: Tulis satu pertanyaan dari situasi konkret di akhir adegan. Beri empat tindakan berbeda yang semuanya menjawabnya, sesuai waktu, sumber daya, dan informasi karakter. Kenalkan detail yang dibutuhkan sebelum pemain memilih. Beri tiap opsi keuntungan, biaya, risiko, atau kesempatan yang berbeda supaya pilihan bergantung pada prioritas pemain dan nggak ada satu jawaban yang jelas terbaik. Dalam hint, tampilkan efek yang bisa diperkirakan dari masing-masing pilihan. Kalau pemain menulis jawaban di luar A–D, jadikan jawaban itu tindakan berikutnya dan tunjukkan apa yang terjadi.
+15. RELASI DAN CHEMISTRY: Relasi mengukur hubungan sosial secara umum. Chemistry mengukur ketertarikan romantis dengan tiap tokoh lawan jenis. Untuk pemain non-biner, ikuti ketertarikan yang sudah muncul di cerita. Isi statDeltas.chemistry hanya saat adegan menunjukkan perubahan ketertarikan dengan tokoh bernama. Berteman atau bersikap ramah saja tidak menambah Chemistry. Pakai nama konsisten. Tokoh baru mulai dari 0, dan skornya tidak otomatis mengubah status pasangan.`;
 
 const STORY_PERIOD_FORMAT = new Intl.DateTimeFormat('id-ID', {
   month: 'long',
@@ -333,6 +396,66 @@ async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxRetries = 2): Pro
     }
   }
   throw lastError;
+}
+
+function generateStory<T>(ai: GoogleGenAI, prompt: string, schema: Schema, read: (text: string) => T) {
+  return callGeminiWithRetry(async () => {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: {
+        systemInstruction: getStoryInstructions(),
+        responseMimeType: 'application/json',
+        responseSchema: schema,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+      },
+    });
+    return read(response.text ?? '');
+  });
+}
+
+function parseStoryJson(text: string): unknown {
+  const cleaned = text.trim();
+  const fenced = cleaned.match(/^[ \t]*(`{3,}|~{3,})(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\1[ \t]*\r?$/im);
+  return JSON.parse(fenced?.[2] ?? cleaned);
+}
+
+function generateChapter(ai: GoogleGenAI, prompt: string, currentHealth?: number) {
+  return generateStory(ai, prompt, chapterSchema, (text) => {
+    const parsed = parseStoryJson(text) as Partial<ChapterResponse>;
+    if (typeof parsed?.narrative !== 'string' || !parsed.narrative.trim()) {
+      throw new Error('Gemini returned a chapter without a scene');
+    }
+
+    const narrative = stripEmDash(parsed.narrative.trim());
+    if (currentHealth !== undefined && currentHealth + clampDelta(parsed.statDeltas?.health) <= 0) {
+      return { ...parsed, narrative, dilemmaQuestion: '', options: [] as StoryOption[] };
+    }
+
+    if (typeof parsed.dilemmaQuestion !== 'string' || !parsed.dilemmaQuestion.trim() ||
+      !Array.isArray(parsed.options) || parsed.options.length !== 4) {
+      throw new Error('Gemini returned an incomplete dilemma');
+    }
+
+    const labels = new Set<string>();
+    const options: StoryOption[] = parsed.options.map((option, index) => {
+      if (typeof option?.label !== 'string' || !option.label.trim() ||
+        typeof option.hint !== 'string' || !option.hint.trim()) {
+        throw new Error('Gemini returned an incomplete option');
+      }
+      const label = stripEmDash(option.label.trim());
+      const key = label.toLowerCase().replace(/\s+/g, ' ');
+      if (labels.has(key)) throw new Error('Gemini returned a duplicate option');
+      labels.add(key);
+      return { id: `opt_${index + 1}`, label, hint: stripEmDash(option.hint.trim()) };
+    });
+
+    return { ...parsed, narrative, dilemmaQuestion: stripEmDash(parsed.dilemmaQuestion.trim()), options };
+  });
+}
+
+function generateEnding(ai: GoogleGenAI, prompt: string) {
+  return generateStory(ai, prompt, endingSchema, (text) => sanitizeEndingSummary(parseStoryJson(text) as Partial<EndingSummary>));
 }
 
 function formatGeminiError(error: unknown): { status: number; message: string } {
@@ -596,55 +719,26 @@ app.post('/api/story/start', async (req, res) => {
     const prompt = `Mulai simulasi hidup baru buat:
 - Nama: ${name}
 - Gender: ${gender}
-- Latar Kelas Keluarga: ${classContextMap[familyClass]}
+- Latar yang sudah dipilih pemain: ${classContextMap[familyClass]}
+- Statistik awal: ${JSON.stringify(initialStats)}
 - Momen awal: Baru mulai melangkah ke hidup dewasa (Bab 1)
 
-Buka Bab 1 dengan adegan singkat yang mencerminkan latar keluarga ${familyClass}-nya. Kalau ortu atau sahabat mengajak ngobrol, biarkan karakter pemain menanggapi langsung lewat ucapan atau tindakan yang wajar.
+Langsung mulai hari pertama berdasarkan latar yang sudah dipilih di layar setup. Kenalkan situasi awal lewat kejadian atau percakapan, lalu tunjukkan hal yang bikin karakter harus memilih. Tulis pertanyaan dan empat opsi yang semuanya bisa dipahami dari adegan itu.
 Set relationshipUpdate ke status "Lajang" (partnerName dan partnerNote kosong).
-Kasih statDeltas 0 semua, consequenceNote singkat soal titik start hidupnya, 1 pertanyaan dilema yang santai tapi ngena, dan 4 opsi keputusan awal yang bervariasi (campuran arah belajar/karier, sosial/kenalan orang baru, dan keluarga/hobi).`;
+Kasih statDeltas 0 semua dan consequenceNote soal titik awal karakter.`;
 
-    const response = await callGeminiWithRetry(() =>
-      ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: prompt,
-        config: {
-          systemInstruction: getStoryInstructions(),
-          responseMimeType: 'application/json',
-          responseSchema: chapterSchema,
-          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-        },
-      }),
-    );
-
-    const parsed = JSON.parse((response.text ?? '{}').trim()) as Partial<ChapterResponse>;
+    const parsed = await generateChapter(ai, prompt);
     const chapter: ChapterResponse = {
       chapterTitle: stripEmDash(parsed.chapterTitle || 'Pagi Baru Dimulai'),
       lifePhase: stripEmDash(parsed.lifePhase || 'Titik Awal'),
-      narrative: stripEmDash(
-        parsed.narrative ||
-          `Ibu naruh teh hangat di depanmu. "Jadi, habis ini mau ngapain, ${name}?"\n\nKamu dorong ponsel ke tengah meja. "Aku lagi lihat beberapa pilihan, Bu." Ibu narik kursi dan duduk di sebelahmu. "Coba Ibu lihat. Mana yang bikin kamu penasaran?" Kamu geser layar pelan. Ada beberapa hal yang selama ini cuma berani kamu simpan di tab.`,
-      ),
-      dilemmaQuestion: stripEmDash(
-        parsed.dilemmaQuestion || 'Langkah pertama yang pengen kamu ambil apa nih?',
-      ),
+      narrative: parsed.narrative,
+      dilemmaQuestion: parsed.dilemmaQuestion,
       consequenceNote: stripEmDash(
         parsed.consequenceNote || 'Perjalanan hidupmu resmi dimulai dari sini.',
       ),
       statDeltas: { health: 0, finance: 0, career: 0, relationships: 0, happiness: 0 },
       newTrait: parsed.newTrait?.trim() ? stripEmDash(parsed.newTrait.trim()) : undefined,
-      options:
-        Array.isArray(parsed.options) && parsed.options.length > 0
-          ? parsed.options.slice(0, 4).map((opt, idx) => ({
-              id: opt.id || `opt_${idx + 1}`,
-              label: stripEmDash(opt.label || ''),
-              hint: stripEmDash(opt.hint || ''),
-            }))
-          : [
-              { id: 'opt_1', label: 'Kuliah atau kursus skill baru', hint: 'Ilmu dapet, peluang kebuka.' },
-              { id: 'opt_2', label: 'Nekat merantau ke kota besar', hint: 'Risiko gede, pengalaman luas.' },
-              { id: 'opt_3', label: 'Nongkrong dan perluas lingkaran teman', hint: 'Kenal orang baru, relasi naik.' },
-              { id: 'opt_4', label: 'Rintis proyek atau bisnis kecil', hint: 'Bebas, tapi penuh ketidakpastian.' },
-            ],
+      options: parsed.options,
       isEnding: false,
       relationshipUpdate: { status: 'Lajang' },
     };
@@ -657,6 +751,7 @@ Kasih statDeltas 0 semua, consequenceNote singkat soal titik start hidupnya, 1 p
       stats: initialStats,
       traits: chapter.newTrait ? [chapter.newTrait] : [],
       relationship: { status: 'Lajang' },
+      chemistry: [],
     };
 
     saveGame(req, res, revision, { character, currentChapter: chapter, turn: 1, timeline: [], savedAt: new Date().toISOString() });
@@ -671,12 +766,14 @@ app.post('/api/story/next', async (req, res) => {
     const revision = requireCurrentRevision(req, res);
     if (revision === null) return;
     const active = accounts.game.loadActive(res.locals.userId);
-    const selectedAnswer = typeof req.body?.selectedAnswer === 'string' ? req.body.selectedAnswer.trim() : '';
-    if (!active || active.currentChapter.isEnding || !selectedAnswer) {
+    const answer = typeof req.body?.selectedAnswer === 'string' ? req.body.selectedAnswer.trim() : '';
+    if (!active || active.currentChapter.isEnding || !answer) {
       res.status(400).json({ error: 'Data karakter dan pilihanmu belum lengkap nih.' });
       return;
     }
     const { character, currentChapter } = active;
+    const choiceIndex = answer.length === 1 ? 'ABCD'.indexOf(answer.toUpperCase()) : -1;
+    const selectedAnswer = currentChapter.options[choiceIndex]?.label ?? answer;
     const turn = active.turn + 1;
     const entry: TimelineEntry = {
       turn: active.turn,
@@ -711,6 +808,7 @@ Profil Karakter:
 - Latar Kelas Keluarga Awal: ${character.familyClass || 'Middle'}
 - Fase Cerita Saat Ini: ${character.phase}
 - Status Hubungan Saat Ini: ${relationshipSummary}
+- Chemistry per tokoh (skor 0–100): ${JSON.stringify(character.chemistry ?? [])}
 - Sifat yang udah kebentuk: ${character.traits.length > 0 ? character.traits.join(', ') : 'Belum menonjol'}
 - Statistik sebelum pilihan ini: Kesehatan=${currentStats.health}, Keuangan=${currentStats.finance}, Karier=${currentStats.career}, Relasi=${currentStats.relationships}, Kebahagiaan=${currentStats.happiness}
 
@@ -723,33 +821,25 @@ ${currentChapter.narrative}
 Pilihan Terbaru yang Diambil:
 "${selectedAnswer}"
 
+Pertanyaan yang dijawab pemain:
+${currentChapter.dilemmaQuestion}
+
 Instruksi Bab ${turn}:
-- Ceritain kelanjutan kejadiannya secara mengalir dan alami dari bab sebelumnya tanpa nyebut atau ngitung angka umur.
-- Tunjukkan dampak pilihan lewat tindakan, ucapan, dan respons tokoh. Kalau pilihan pemain berisi ucapan, masukkan ucapannya dalam tanda kutip dan beri tokoh lain ruang untuk bereaksi.
+- Lanjutkan dari akhir adegan terakhir dan ikuti maksud jawaban pemain, termasuk jawaban bebas. Kalau jawabannya singkat seperti "ya", tafsirkan dari pertanyaan terakhir dan percakapannya. Kalau tindakan belum bisa dilakukan, tunjukkan hambatannya di adegan.
+- Tunjukkan dampak lewat tindakan, ucapan, dan respons tokoh. Kalau waktu atau tempat berganti, beri transisi yang memperjelas kaitannya dengan pilihan tadi.
 - Pertahankan status "${currentRelationship.status}" kalau pilihan dan interaksi tokoh belum mendukung perubahan. Tokoh baru boleh jadi bagian cerita tanpa jadi gebetan.
-- Tunjukin efek nyata dari pilihan "${selectedAnswer}" ke statistik (statDeltas). Kalau pilihannya nekat/merusak tubuh atau health udah tipis, health bisa turun drastis sampai 0.
-- Biarkan akibat pilihan tadi memunculkan 1 dilema yang konkret. Kasih 4 tindakan berbeda yang bisa langsung dilakukan dari situasi itu. Masukkan opsi romansa hanya kalau muncul wajar dari situasi.`;
+- Tunjukin efek pilihan lewat statDeltas. Setiap perubahan, termasuk Chemistry per tokoh, tetap dalam rentang ${STAT_DELTA_RANGE}.
+- Kalau cerita berlanjut, akhiri di titik keputusan yang muncul dari kejadian tadi. Tulis satu pertanyaan dan empat tanggapan yang semuanya sesuai titik itu. Opsi romansa muncul jika wajar di situasi tersebut. Kalau kesehatan mencapai nol, tuntaskan adegan terakhir dan kosongkan pertanyaan serta opsi.`;
 
-    const response = await callGeminiWithRetry(() =>
-      ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: prompt,
-        config: {
-          systemInstruction: getStoryInstructions(),
-          responseMimeType: 'application/json',
-          responseSchema: chapterSchema,
-          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-        },
-      }),
-    );
-
-    const parsed = JSON.parse((response.text ?? '{}').trim()) as Partial<ChapterResponse>;
-    const deltas: CharacterStats = {
-      health: clampDelta(parsed.statDeltas?.health),
-      finance: clampDelta(parsed.statDeltas?.finance),
-      career: clampDelta(parsed.statDeltas?.career),
-      relationships: clampDelta(parsed.statDeltas?.relationships),
-      happiness: clampDelta(parsed.statDeltas?.happiness),
+    const parsed = await generateChapter(ai, prompt, currentStats.health);
+    const chemistry = updateChemistry(character, parsed.statDeltas?.chemistry);
+    const deltas: StatChanges = {
+      health: appliedDelta(currentStats.health, parsed.statDeltas?.health),
+      finance: appliedDelta(currentStats.finance, parsed.statDeltas?.finance),
+      career: appliedDelta(currentStats.career, parsed.statDeltas?.career),
+      relationships: appliedDelta(currentStats.relationships, parsed.statDeltas?.relationships),
+      happiness: appliedDelta(currentStats.happiness, parsed.statDeltas?.happiness),
+      chemistry: chemistry.changes,
     };
 
     const nextStats = applyDeltas(currentStats, deltas);
@@ -772,6 +862,7 @@ Instruksi Bab ${turn}:
       stats: nextStats,
       traits: updatedTraits,
       relationship: nextRelationship,
+      chemistry: chemistry.scores,
     };
 
     const isHealthZero = nextStats.health <= 0;
@@ -786,64 +877,38 @@ Instruksi Bab ${turn}:
       const endingPrompt = `Kesehatan ${character.name} baru aja menyentuh angka 0 pada Bab ${turn} (Fase: ${nextPhase}).
 
 Keputusan terakhirnya: "${selectedAnswer}"
-Cerita terakhir: ${parsed.narrative ?? ''}
+Pertanyaan yang dijawab: ${currentChapter.dilemmaQuestion}
 Status Hubungan: ${finalRelSummary}
+Chemistry per tokoh: ${JSON.stringify(updatedCharacter.chemistry)}
 Statistik akhir: Kesehatan=0, Keuangan=${nextStats.finance}, Karier=${nextStats.career}, Relasi=${nextStats.relationships}, Kebahagiaan=${nextStats.happiness}
 Sifat yang kebentuk: ${updatedTraits.join(', ') || 'Apa adanya'}
 
-Riwayat Lengkap:
+Riwayat Perjalanan:
 ${historyText}
 
-Bikin epilog nasib akhir yang singkat, kasual tapi dalem dan membekas soal gimana ${character.name} nutup perjalanan hidupnya sampai akhir (konsisten dengan status hubungan di atas, jangan ngarang pasangan yang nggak pernah ada).`;
+Adegan sebelum pilihan terakhir:
+${currentChapter.narrative}
 
-      const endingRes = await callGeminiWithRetry(() =>
-        ai.models.generateContent({
-          model: MODEL_NAME,
-          contents: endingPrompt,
-          config: {
-            systemInstruction: getStoryInstructions(),
-            responseMimeType: 'application/json',
-            responseSchema: endingSchema,
-            thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-          },
-        }),
-      );
+Akibat pilihan dan adegan terakhir:
+${parsed.narrative}
 
-      endingSummary = sanitizeEndingSummary(
-        JSON.parse((endingRes.text ?? '{}').trim()) as Partial<EndingSummary>,
-      );
+Sambung dari adegan terakhir dan tutup perjalanan ${character.name}. Tunjukkan dampak keputusan terakhir dan kaitkan dengan momen penting yang memang sudah terjadi. Pertahankan hubungan yang sudah terbentuk. Cerita berhenti di sini tanpa pilihan baru.`;
+
+      endingSummary = await generateEnding(ai, endingPrompt);
     }
 
     const chapter: ChapterResponse = {
       chapterTitle: stripEmDash(parsed.chapterTitle || `Bab ${turn}`),
       lifePhase: stripEmDash(nextPhase),
-      narrative: stripEmDash(
-        parsed.narrative ||
-          `Waktu terus jalan dan ${character.name} mulai ngerasain langsung hasil dari pilihannya kemarin.`,
-      ),
-      dilemmaQuestion: isHealthZero
-        ? ''
-        : stripEmDash(parsed.dilemmaQuestion || 'Sekarang, langkah apa yang mau kamu ambil?'),
+      narrative: parsed.narrative,
+      dilemmaQuestion: parsed.dilemmaQuestion,
       consequenceNote: stripEmDash(
         parsed.consequenceNote || 'Pilihan kemarin ngubah arah hidupmu hari ini.',
       ),
       statDeltas: deltas,
       newTrait: newTrait ? stripEmDash(newTrait) : undefined,
       relationshipUpdate: nextRelationship,
-      options: isHealthZero
-        ? []
-        : Array.isArray(parsed.options) && parsed.options.length > 0
-          ? parsed.options.slice(0, 4).map((opt, idx) => ({
-              id: opt.id || `opt_${idx + 1}`,
-              label: stripEmDash(opt.label || ''),
-              hint: stripEmDash(opt.hint || ''),
-            }))
-          : [
-              { id: 'opt_1', label: 'Ambil langkah nekat sekalian', hint: 'Peluang gede, risikonya juga gede.' },
-              { id: 'opt_2', label: 'Main aman dan jaga ritme', hint: 'Biar hidup tetap stabil dulu.' },
-              { id: 'opt_3', label: 'Dahuluin orang-orang terdekat', hint: 'Relasi kuat, karier agak melambat.' },
-              { id: 'opt_4', label: 'Rehat sebentar dan ganti haluan', hint: 'Cari napas dan arah baru.' },
-            ],
+      options: parsed.options,
       isEnding: isHealthZero,
       endingSummary,
     };
@@ -886,6 +951,7 @@ app.post('/api/story/end', async (req, res) => {
     const prompt = `Pemain mutusin buat nutup cerita hidup ${character.name} (${character.gender}, asal keluarga kelas ${character.familyClass || 'Middle'}) pada Bab ${turn} (Fase: ${character.phase}).
 
 Status Hubungan: ${endRelSummary}
+Chemistry per tokoh: ${JSON.stringify(character.chemistry ?? [])}
 Statistik saat ini: Kesehatan=${stats.health}, Keuangan=${stats.finance}, Karier=${stats.career}, Relasi=${stats.relationships}, Kebahagiaan=${stats.happiness}
 Sifat yang kebentuk: ${character.traits.join(', ') || 'Apa adanya'}
 
@@ -895,29 +961,17 @@ ${historyText}
 Adegan terakhir:
 ${currentChapter.narrative}
 
-Bikin epilog nasib akhir yang singkat, kasual, natural, dan ngena sesuai kondisi hidup serta pilihan-pilihan ${character.name} (konsisten dengan status hubungan di atas, jangan ngarang pasangan yang nggak pernah dikenalin).`;
+Keputusan yang masih terbuka saat cerita ditutup:
+${currentChapter.dilemmaQuestion}
 
-    const endingRes = await callGeminiWithRetry(() =>
-      ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: prompt,
-        config: {
-          systemInstruction: getStoryInstructions(),
-          responseMimeType: 'application/json',
-          responseSchema: endingSchema,
-          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-        },
-      }),
-    );
+Sambung dari adegan terakhir dan tulis penutup yang sesuai kondisi, pilihan, dan hubungan ${character.name}. Kalau masih ada keputusan terbuka, biarkan terbuka. Tindakan menutup permainan tidak berarti karakter meninggal. Tutup tanpa pertanyaan atau pilihan baru.`;
 
-    const endingSummary = sanitizeEndingSummary(
-      JSON.parse((endingRes.text ?? '{}').trim()) as Partial<EndingSummary>,
-    );
+    const endingSummary = await generateEnding(ai, prompt);
 
     const chapter: ChapterResponse = {
       chapterTitle: 'Garis Akhir Cerita',
       lifePhase: 'Nasib Akhir',
-      narrative: `Di bab ke-${turn}, ${character.name} narik napas panjang dan nengok ke belakang, ngelihat semua jejak yang udah dilewatin.`,
+      narrative: currentChapter.narrative,
       dilemmaQuestion: '',
       consequenceNote: 'Semua pilihanmu dirangkum jadi gambaran utuh perjalanan hidupmu.',
       statDeltas: { health: 0, finance: 0, career: 0, relationships: 0, happiness: 0 },
@@ -950,7 +1004,7 @@ async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, allowedHosts: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);

@@ -3,6 +3,8 @@ import { motion } from 'motion/react';
 import { Share2, Trash2 } from 'lucide-react';
 import type { ArchivedLife } from '../types/simulation';
 import { FateCardModal } from './FateCardModal';
+import { ChemistryScores } from './ChemistryScores';
+import { StoryMarkdown } from './StoryMarkdown';
 
 interface ArchiveViewProps {
   archives: ArchivedLife[];
@@ -133,9 +135,7 @@ export function ArchiveView({
                   {item.endingSummary.fateHeadline}
                 </p>
 
-                <p className="text-sm text-slate-600 mt-3 leading-relaxed line-clamp-4">
-                  {item.endingSummary.epilogue}
-                </p>
+                <StoryMarkdown text={item.endingSummary.epilogue} className="text-sm text-slate-600 mt-3 leading-relaxed line-clamp-4" />
               </div>
 
               <div className="pt-4 border-t border-slate-100 space-y-2">
@@ -167,6 +167,11 @@ export function ArchiveView({
                     <div className="font-semibold text-slate-800">{item.character.stats.happiness}</div>
                   </div>
                 </div>
+                {Boolean(item.character.chemistry?.length) && (
+                  <section className="border-t border-slate-100 pt-3">
+                    <ChemistryScores scores={item.character.chemistry} />
+                  </section>
+                )}
               </div>
             </motion.article>
           );
