@@ -22,7 +22,7 @@ function isChemistry(value: unknown, field: 'points' | 'delta', min: number, max
 }
 
 function isStatChanges(value: unknown) {
-  return isRecord(value) && isStats(value) && isChemistry(value.chemistry, 'delta', -5, 5);
+  return isRecord(value) && isStats(value) && isChemistry(value.chemistry, 'delta', -25, 25);
 }
 
 function isCharacter(value: unknown) {

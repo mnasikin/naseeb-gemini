@@ -1,5 +1,6 @@
 export type GenderOption = 'Laki-laki' | 'Perempuan' | 'Non-biner';
 export type FamilyClass = 'Lower' | 'Middle' | 'Upper';
+export type FamilyClassChoice = FamilyClass | 'Random';
 export type RelationshipStatus = 'Lajang' | 'PDKT' | 'Pacaran' | 'Menikah' | 'Berpisah';
 
 export interface RelationshipProfile {
@@ -23,13 +24,15 @@ export interface ChemistryScore {
 }
 
 export interface StatChanges extends CharacterStats {
-  chemistry?: Array<Omit<ChemistryScore, 'points'> & { delta: number }>;
+  majorEvents?: Partial<Record<keyof CharacterStats, string>>;
+  chemistry?: Array<Omit<ChemistryScore, 'points'> & { delta: number; majorEvent?: string }>;
 }
 
 export interface StoryOption {
   id: string;
   label: string;
   hint: string;
+  effects?: StatChanges;
 }
 
 export interface CharacterState {

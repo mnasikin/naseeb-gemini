@@ -1,11 +1,11 @@
 import { useState, type FormEvent } from 'react';
 import { motion } from 'motion/react';
 import { ArrowRight, Loader2 } from 'lucide-react';
-import type { FamilyClass, GenderOption } from '../types/simulation';
+import type { FamilyClassChoice, GenderOption } from '../types/simulation';
 import { StageIllustration } from './StageIllustration';
 
 interface CharacterSetupProps {
-  onStart: (name: string, gender: GenderOption, familyClass: FamilyClass) => void;
+  onStart: (name: string, gender: GenderOption, familyClass: FamilyClassChoice) => void;
   isLoading: boolean;
   error: string | null;
 }
@@ -16,16 +16,17 @@ const GENDER_OPTIONS: { value: GenderOption; description: string }[] = [
   { value: 'Non-biner', description: 'Sudut pandang netral' },
 ];
 
-const FAMILY_CLASS_OPTIONS: { value: FamilyClass; label: string; description: string }[] = [
+const FAMILY_CLASS_OPTIONS: { value: FamilyClassChoice; label: string; description: string }[] = [
   { value: 'Lower', label: 'Lower', description: 'Pas-pasan, berjuang dari nol' },
   { value: 'Middle', label: 'Middle', description: 'Cukup aja, tuntutan banyak' },
   { value: 'Upper', label: 'Upper', description: 'Serba ada, ekspektasi tinggi' },
+  { value: 'Random', label: 'Random', description: 'Undi Lower, Middle, atau Upper' },
 ];
 
 export function CharacterSetup({ onStart, isLoading, error }: CharacterSetupProps) {
   const [name, setName] = useState('');
   const [gender, setGender] = useState<GenderOption>('Laki-laki');
-  const [familyClass, setFamilyClass] = useState<FamilyClass>('Middle');
+  const [familyClass, setFamilyClass] = useState<FamilyClassChoice>('Middle');
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const handleSubmit = (e: FormEvent) => {
@@ -136,7 +137,7 @@ export function CharacterSetup({ onStart, isLoading, error }: CharacterSetupProp
                 <span className="block text-sm font-semibold text-slate-800 mb-2">
                   Latar Ekonomi Keluarga
                 </span>
-                <div className="grid grid-cols-3 gap-2 sm:gap-3">
+                <div className="grid grid-cols-2 gap-2 sm:gap-3">
                   {FAMILY_CLASS_OPTIONS.map((option) => {
                     const isSelected = familyClass === option.value;
                     return (
@@ -147,6 +148,7 @@ export function CharacterSetup({ onStart, isLoading, error }: CharacterSetupProp
                         whileTap={{ scale: 0.98 }}
                         transition={{ duration: 0.15 }}
                         onClick={() => setFamilyClass(option.value)}
+                        aria-pressed={isSelected}
                         disabled={isLoading}
                         className={`text-left px-3 sm:px-4 py-3 rounded-xl sm:rounded-lg border transition-colors min-h-[48px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${
                           isSelected

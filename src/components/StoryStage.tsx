@@ -183,7 +183,7 @@ export function StoryStage({
                         <div className="text-[15px] font-semibold text-slate-900 group-hover:text-blue-700 transition-colors">
                           {option.label}
                         </div>
-                        <div className="text-xs text-slate-500 mt-1 leading-relaxed">
+                        <div title="Perkiraan perubahan poin" className="text-xs font-mono tabular-nums text-slate-500 mt-1 leading-relaxed">
                           {option.hint}
                         </div>
                       </div>

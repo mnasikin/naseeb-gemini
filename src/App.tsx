@@ -19,7 +19,7 @@ import {
 } from './utils/fullscreen';
 import type {
   AccountData,
-  FamilyClass,
+  FamilyClassChoice,
   GameData,
   GameUpdate,
   GenderOption,
@@ -144,7 +144,7 @@ function Game({ account, onLogout, onSessionLost }: {
   const handleStartSimulation = async (
     name: string,
     gender: GenderOption,
-    familyClass: FamilyClass,
+    familyClass: FamilyClassChoice,
   ) => {
     if (isLoading) return;
     // Trigger browser fullscreen synchronously inside user click/submit gesture
