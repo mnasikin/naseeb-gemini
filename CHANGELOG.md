@@ -2,6 +2,19 @@
 
 Catatan perubahan Naseeb berdasarkan versi dan tanggal rilis. Commit `f447207` menjadi baseline **Initial release**, termasuk seluruh perubahan sebelumnya.
 
+## 0.1.1 — 2026-11-25
+
+### Diubah
+
+- Panjang narasi mengikuti kebutuhan adegan tanpa jumlah paragraf minimum. Tindakan rutin dan percakapan sederhana cukup beberapa kalimat, sementara momen penting dapat memakai ruang lebih panjang.
+- Sapaan dalam dialog, opsi, dan epilog menyesuaikan usia, kedekatan, serta peran lawan bicara. Gaya gue/lo digunakan saat sesuai, dengan sapaan aku/Bu/Pak atau saya/Bapak/Ibu untuk konteks keluarga dan situasi formal.
+- Pilihan tindakan lebih beragam, termasuk spontan, iseng, santai, menghindar, dan impulsif yang tetap sesuai adegan. Urutan dan nuansa opsi divariasikan antar giliran.
+
+### Diperbaiki
+
+- Guardrail mengurangi kecenderungan mengarahkan seluruh opsi ke karier, pengembangan diri, atau hidup ideal. Pilihan santai atau ngawur mengikuti niat pemain tanpa selalu berubah menjadi peluang sukses atau ceramah motivasi.
+- Dampak pilihan dapat negatif, netral, positif, atau campuran sesuai kejadian. Bonus tidak diberikan otomatis, kerugian tidak selalu ditebus dengan kenaikan aspek lain, dan istirahat tidak otomatis dihukum karena tidak produktif.
+
 ## 0.1.0 — 2026-11-18
 
 ### Ditambahkan
